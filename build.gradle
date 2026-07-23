@@ -1,7 +1,17 @@
+buildscript {
+    repositories { mavenCentral() }
+    dependencies {
+        classpath 'org.postgresql:postgresql:42.7.3'
+        classpath 'org.flywaydb:flyway-database-postgresql:10.17.0'
+    }
+}
+
 plugins {
 	id 'java'
 	id 'org.springframework.boot' version '3.5.16'
-	id 'io.spring.dependency-management' version '1.1.7'
+	id 'io.spring.dependency-management' version '1.1.6'
+	id 'nu.studer.jooq' version '9.0'  // gera classes jOOQ a partir do banco
+	id 'org.flywaydb.flyway' version '10.17.0'  // roda as migrations (usado antes do jOOQ)
 }
 
 group = 'com.fecalemos'
@@ -13,26 +23,99 @@ java {
 	}
 }
 
-repositories {
-	mavenCentral()
-}
+repositories { mavenCentral() }
 
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-jooq'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-web'
+	
 	implementation 'org.flywaydb:flyway-core'
 	implementation 'org.flywaydb:flyway-database-postgresql'
-	developmentOnly 'org.springframework.boot:spring-boot-docker-compose'
 	runtimeOnly 'org.postgresql:postgresql'
+
+	// O gerador de código JOOQ precisa do driver JDBC no próprio classpath
+	jooqGenerator 'org.postgresql:postgresql:42.7.3'
+	
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
-	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
-	testImplementation 'org.testcontainers:junit-jupiter'
-	testImplementation 'org.testcontainers:postgresql'
-	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+    testImplementation 'org.testcontainers:junit-jupiter'
+    testImplementation 'org.testcontainers:postgresql'
+}
+
+dependencyManagement {
+	imports {
+		mavenBom 'org.testcontainers:testcontainers-bom:1.21.4'
+	}
+}
+
+// ---- Conexão local reutilizada por Flyway e jOOQ (mesma do docker-compose) ----
+def dbUrl = 'jdbc:postgresql://localhost:5432/ledgercore'
+def dbUser = 'ledger'
+def dbPassword = 'ledger'
+
+flyway {
+	url = dbUrl
+	user = dbUser
+	password = dbPassword
+	locations = ['filesystem:src/main/resources/db/migration']
+	// JDBC driver já vem do classpath do buildscript (linha acima);
+	// sem isso, o plugin tenta resolver compileClasspath e quebra com
+	// io.spring.dependency-management (versões dos starters ficam vazias).
+	configurations = []
+}
+
+jooq {
+    version = '3.19.10'  // mantenha alinhado à versão de jOOQ que o Spring Boot gerencia
+    configurations {
+        main {
+            // false = jOOQ NÃO tenta conectar no banco a cada compilação.
+            // Você gera as classes manualmente com: ./gradlew generateJooq
+            generateSchemaSourceOnCompilation = false
+            generationTool {
+                logging = org.jooq.meta.jaxb.Logging.WARN
+                jdbc {
+                    driver = 'org.postgresql.Driver'
+                    url = dbUrl
+                    user = dbUser
+                    password = dbPassword
+                }
+                generator {
+                    name = 'org.jooq.codegen.DefaultGenerator'
+                    database {
+                        name = 'org.jooq.meta.postgres.PostgresDatabase'
+                        inputSchema = 'public'
+                        excludes = 'flyway_schema_history'   // não gerar a tabela de controle do Flyway
+                    }
+                    generate {
+                        records = true
+                        fluentSetters = true
+                    }
+                    target {
+                        packageName = 'com.fernandolemos.ledgercore.jooq'
+                        directory = 'build/generated-src/jooq/main'
+                    }
+                }
+            }
+        }
+    }
+}
+
+tasks.named('generateJooq').configure {
+	dependsOn tasks.named('flywayMigrate')
 }
 
 tasks.named('test') {
 	useJUnitPlatform()
+}
+
+tasks.register('debugManagedVersions') {
+	doLast {
+		println "managed web version: " + dependencyManagement.managedVersions['org.springframework.boot:spring-boot-starter-web']
+		println "all managed keys count: " + dependencyManagement.managedVersions.size()
+		dependencyManagement.managedVersions.findAll { it.key.toString().contains('spring-boot-starter') }.each {
+			println it
+		}
+	}
 }

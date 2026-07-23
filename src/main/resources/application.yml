@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: ledgercore
+  datasource:
+    url: jdbc:postgresql://localhost:5432/ledgercore
+    username: ledger
+    password: ledger
+  flyway:
+    enabled: true          # Spring roda as migrations automaticamente no startup
+    locations: classpath:db/migration
+  jooq:
+    sql-dialect: POSTGRES
+ 
+# Observabilidade: expõe /actuator/health e /actuator/prometheus (Semana 4)
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus
+  metrics:
+    tags:
+      application: ledgercore
+ 
+server:
+  port: 8080
+ 
